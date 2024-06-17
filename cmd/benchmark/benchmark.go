@@ -112,7 +112,10 @@ func main() {
 				return err
 			}
 
-			forward(stream, conn) // TODO: check err
+			go func() {
+				forward(stream, conn) // TODO: check err
+				stream.CloseSend()
+			}()
 		}
 	})
 
@@ -142,7 +145,10 @@ func main() {
 				return err
 			}
 
-			go forward(stream, conn) // TODO: check err
+			go func() {
+				forward(stream, conn) // TODO: check err
+				stream.CloseSend()
+			}()
 		}
 	})
 

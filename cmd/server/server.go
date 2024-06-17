@@ -2,14 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
-	"io"
 	"log"
 	"net"
 	"sync"
 
+	st "github.com/mangelajo/grpc-experiments/pkg/stream"
 	pb "github.com/mangelajo/grpc-experiments/proto"
-	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -115,18 +113,23 @@ func (s *ForExporterServer) Register(ctx context.Context, report *pb.ExporterRep
 }
 
 func (s *ForExporterServer) DataStream(stream pb.ForExporter_DataStreamServer) error {
-	log.Println("new stream")
 	id := stream.Context().Value("id").(string)
 	mapping := stream.Context().Value("mapping").(*streamMapping)
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = context.WithValue(ctx, "stream", stream)
 	mapping.mutex.RLock()
-	mapping.data[id] <- streamContext{
+	ch := mapping.data[id]
+	mapping.mutex.RUnlock()
+
+	select {
+	case ch <- streamContext{
 		Context:    ctx,
 		CancelFunc: cancel,
+	}:
+		log.Println("new stream queued")
+	case <-stream.Context().Done():
+		return nil
 	}
-	mapping.mutex.RUnlock()
-	log.Println("new stream")
 	select {
 	case <-ctx.Done():
 		log.Println("stream finished")
@@ -139,42 +142,15 @@ func (s *ForClientServer) DataStream(stream pb.ForClient_DataStreamServer) error
 	id := stream.Context().Value("id").(string)
 	mapping := stream.Context().Value("mapping").(*streamMapping)
 	mapping.mutex.RLock()
-	sctx := <-mapping.data[id]
+	ch := mapping.data[id]
 	mapping.mutex.RUnlock()
-	estream := sctx.Context.Value("stream").(pb.ForExporter_DataStreamServer)
-
-	log.Println("new stream connected")
-	defer sctx.CancelFunc()
-	return forward(stream.Context(), stream, estream)
-}
-
-type Stream[T any] interface {
-	Send(T) error
-	Recv() (T, error)
-}
-
-func pipe[T any, A Stream[T], B Stream[T]](a A, b B) error {
-	for {
-		chunk, err := a.Recv()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		err = b.Send(chunk)
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
+	select {
+	case sctx := <-ch:
+		estream := sctx.Context.Value("stream").(pb.ForExporter_DataStreamServer)
+		log.Println("new stream connected")
+		defer sctx.CancelFunc()
+		return st.Forward(stream.Context(), stream, estream)
+	case <-stream.Context().Done():
+		return nil
 	}
-}
-
-func forward[T any, A Stream[T], B Stream[T]](ctx context.Context, a A, b B) error {
-	g, _ := errgroup.WithContext(ctx)
-	g.Go(func() error { return pipe(a, b) })
-	g.Go(func() error { return pipe(b, a) })
-	return g.Wait()
 }
