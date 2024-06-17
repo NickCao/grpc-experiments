@@ -31,8 +31,7 @@ type streamContext struct {
 }
 
 type streamMapping struct {
-	mutex *sync.RWMutex
-	data  map[string]chan streamContext
+	data *sync.Map
 }
 
 type streamWrapper struct {
@@ -54,8 +53,7 @@ func main() {
 	}
 
 	mapping := &streamMapping{
-		mutex: &sync.RWMutex{},
-		data:  make(map[string]chan streamContext),
+		data: &sync.Map{},
 	}
 
 	s := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context,
@@ -106,23 +104,21 @@ func main() {
 func (s *ForExporterServer) Register(ctx context.Context, report *pb.ExporterReport) (*emptypb.Empty, error) {
 	id := ctx.Value("id").(string)
 	mapping := ctx.Value("mapping").(*streamMapping)
-	mapping.mutex.Lock()
-	defer mapping.mutex.Unlock()
-	mapping.data[id] = make(chan streamContext, CHANNEL_SIZE)
+	mapping.data.Store(id, make(chan streamContext, CHANNEL_SIZE))
 	return &emptypb.Empty{}, nil
 }
 
 func (s *ForExporterServer) DataStream(stream pb.ForExporter_DataStreamServer) error {
 	id := stream.Context().Value("id").(string)
 	mapping := stream.Context().Value("mapping").(*streamMapping)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = context.WithValue(ctx, "stream", stream)
-	mapping.mutex.RLock()
-	ch := mapping.data[id]
-	mapping.mutex.RUnlock()
+
+	ch, _ := mapping.data.Load(id)
 
 	select {
-	case ch <- streamContext{
+	case ch.(chan streamContext) <- streamContext{
 		Context:    ctx,
 		CancelFunc: cancel,
 	}:
@@ -141,11 +137,9 @@ func (s *ForClientServer) DataStream(stream pb.ForClient_DataStreamServer) error
 	log.Println("new stream connecting")
 	id := stream.Context().Value("id").(string)
 	mapping := stream.Context().Value("mapping").(*streamMapping)
-	mapping.mutex.RLock()
-	ch := mapping.data[id]
-	mapping.mutex.RUnlock()
+	ch, _ := mapping.data.Load(id)
 	select {
-	case sctx := <-ch:
+	case sctx := <-ch.(chan streamContext):
 		estream := sctx.Context.Value("stream").(pb.ForExporter_DataStreamServer)
 		log.Println("new stream connected")
 		defer sctx.CancelFunc()
