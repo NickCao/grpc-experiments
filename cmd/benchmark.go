@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 )
 
 const BUF_SIZE int = 8192
@@ -78,6 +79,11 @@ func (s *ForClientServer) DataStream(stream pb.ForClient_DataStreamServer) error
 		return err
 	}
 
+	md, ok := metadata.FromIncomingContext(stream.Context())
+	if ok {
+		log.Println(md)
+	}
+
 	return forward(stream, conn)
 }
 
@@ -117,7 +123,12 @@ func main() {
 				return err
 			}
 
-			stream, err := client.DataStream(context.Background())
+			// https://cloud.google.com/run/docs/samples/cloudrun-grpc-request-auth
+			md := metadata.New(map[string]string{"authorization": "Bearer dummy"})
+
+			ctx := metadata.NewOutgoingContext(context.TODO(), md)
+
+			stream, err := client.DataStream(ctx)
 			if err != nil {
 				return err
 			}
