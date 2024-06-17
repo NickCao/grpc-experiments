@@ -21,6 +21,21 @@ type Stream interface {
 	Recv() (*pb.DataChunk, error)
 }
 
+// https://grpc.io/docs/guides/auth/#credential-types
+// Call credentials, which are attached to a call (or ClientContext in C++).
+type Credential struct{}
+
+func (c *Credential) GetRequestMetadata(ctx context.Context, uri ...string) (map[string]string, error) {
+	return map[string]string{
+		"authorization": "Bearer dummy-auth-token",
+		"id":            "dummy-device-id",
+	}, nil
+}
+
+func (c *Credential) RequireTransportSecurity() bool {
+	return false
+}
+
 func forward[T Stream](stream T, conn net.Conn) error {
 	g, _ := errgroup.WithContext(context.TODO())
 
@@ -110,7 +125,9 @@ func main() {
 			return err
 		}
 
-		c, err := grpc.NewClient("127.0.0.1:8000", grpc.WithTransportCredentials(insecure.NewCredentials()))
+		c, err := grpc.NewClient("127.0.0.1:8000",
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithPerRPCCredentials(&Credential{}))
 		if err != nil {
 			return err
 		}
@@ -123,12 +140,7 @@ func main() {
 				return err
 			}
 
-			// https://cloud.google.com/run/docs/samples/cloudrun-grpc-request-auth
-			md := metadata.New(map[string]string{"authorization": "Bearer dummy"})
-
-			ctx := metadata.NewOutgoingContext(context.TODO(), md)
-
-			stream, err := client.DataStream(ctx)
+			stream, err := client.DataStream(context.Background())
 			if err != nil {
 				return err
 			}
