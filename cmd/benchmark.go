@@ -68,11 +68,11 @@ func forward[T Stream](stream T, conn net.Conn) error {
 	return g.Wait()
 }
 
-type Server struct {
+type ForClientServer struct {
 	pb.UnimplementedForClientServer
 }
 
-func (s *Server) DataStream(stream pb.ForClient_DataStreamServer) error {
+func (s *ForClientServer) DataStream(stream pb.ForClient_DataStreamServer) error {
 	conn, err := net.Dial("tcp", "127.0.0.1:5201") // iperf3
 	if err != nil {
 		return err
@@ -93,7 +93,7 @@ func main() {
 
 		s := grpc.NewServer()
 
-		pb.RegisterForClientServer(s, &Server{})
+		pb.RegisterForClientServer(s, &ForClientServer{})
 
 		return s.Serve(listen)
 	})
