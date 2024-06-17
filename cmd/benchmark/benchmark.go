@@ -11,7 +11,6 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 )
 
 const BUF_SIZE int = 8192
@@ -84,39 +83,37 @@ func forward[T Stream](stream T, conn net.Conn) error {
 	return g.Wait()
 }
 
-type ForClientServer struct {
-	pb.UnimplementedForClientServer
-}
-
-func (s *ForClientServer) DataStream(stream pb.ForClient_DataStreamServer) error {
-	conn, err := net.Dial("tcp", "127.0.0.1:5201") // iperf3
-	if err != nil {
-		return err
-	}
-
-	md, ok := metadata.FromIncomingContext(stream.Context())
-	if ok {
-		log.Println(md)
-	}
-
-	return forward(stream, conn)
-}
-
 func main() {
 
 	g, _ := errgroup.WithContext(context.TODO())
 
 	g.Go(func() error {
-		listen, err := net.Listen("tcp", "127.0.0.1:8000")
+		c, err := grpc.NewClient("127.0.0.1:8000",
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithPerRPCCredentials(&Credential{}))
 		if err != nil {
 			return err
 		}
 
-		s := grpc.NewServer()
+		client := pb.NewForExporterClient(c)
 
-		pb.RegisterForClientServer(s, &ForClientServer{})
+		client.Register(context.Background(), nil)
+		defer client.Bye(context.Background(), nil)
 
-		return s.Serve(listen)
+		for {
+			log.Println("new stream prepared")
+			stream, err := client.DataStream(context.Background())
+			if err != nil {
+				return err
+			}
+
+			conn, err := net.Dial("tcp", "127.0.0.1:5201") // iperf3
+			if err != nil {
+				return err
+			}
+
+			forward(stream, conn) // TODO: check err
+		}
 	})
 
 	g.Go(func() error {
